@@ -1,7 +1,6 @@
 package by.javaguru.jdmik12.streamingservice.config;
 
 import by.javaguru.jdmik12.common.accounting.message.command.AllocateBudgetCommand;
-import by.javaguru.jdmik12.common.notification.message.command.NotificationCommand;
 import by.javaguru.jdmik12.common.profiler.message.command.CurriculumVitaeCreateCommand;
 import by.javaguru.jdmik12.common.resources.message.command.CheckResourcesCommand;
 import by.javaguru.jdmik12.common.security.message.command.CheckSecurityCommand;
@@ -11,6 +10,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.kafka.common.header.Headers;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.kstream.*;
@@ -18,6 +18,10 @@ import org.apache.kafka.streams.processor.ProcessorContext;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+
+import java.nio.charset.StandardCharsets;
+
+import static org.springframework.kafka.support.KafkaHeaders.REPLY_TOPIC;
 
 @Slf4j
 @Configuration
@@ -32,7 +36,6 @@ public class OutboxTopology {
                                                    @Value("${app.kafka-topics.cv-topic.name}") String cvTopic,
                                                    @Value("${app.kafka-topics.accounting-topic.name}") String accountingTopic,
                                                    @Value("${app.kafka-topics.security-topic.name}") String securityTopic,
-                                                   @Value("${app.kafka-topics.notification-topic.name}") String notificationTopic,
                                                    @Value("${app.kafka-topics.dlt-topic.name}") String dltTopic) {
 
         var keySerde = Serdes.String();
@@ -53,15 +56,23 @@ public class OutboxTopology {
                     @Override
                     public ProcessedMessage transform(String key, StreamingCommand value) {
                         try {
-                            var header = context.headers().lastHeader("service_type");
-                            String type = (header != null)
-                                    ? new String(header.value())
-                                    : "UNKNOWN";
-                            return parseOutboxDto(outboxObjectMapper, value, type);
+                            String serviceType = getHeader("service_type");
+                            String replyTopic = getHeader("reply_topic");
+                            putHeader(context.headers(), REPLY_TOPIC, "reply_topic", replyTopic);
+
+                            return parseOutboxDto(outboxObjectMapper, value, serviceType);
                         } catch (Exception e) {
                             log.error("Error while parsing outbox message", e);
-                            throw new RuntimeException(e);
+                            return new ProcessedMessage(value, "dlt", e);
                         }
+                    }
+
+                    private String getHeader(String headerName) {
+                        var header = context.headers().lastHeader(headerName);
+                        String type = (header != null)
+                                ? new String(header.value())
+                                : dltTopic;
+                        return type;
                     }
 
                     @Override
@@ -74,7 +85,6 @@ public class OutboxTopology {
                 .branch((key, message) -> message.value() instanceof CurriculumVitaeCreateCommand, Branched.as("cv"))
                 .branch((key, message) -> message.value() instanceof AllocateBudgetCommand, Branched.as("accounting"))
                 .branch((key, message) -> message.value() instanceof CheckSecurityCommand, Branched.as("security"))
-                .branch((key, message) -> message.value() instanceof NotificationCommand, Branched.as("notification"))
                 .defaultBranch(Branched.as("unknown"));
 
         processedStreamMap
@@ -100,61 +110,54 @@ public class OutboxTopology {
                 peek((String key, Object createCvCommand) -> log.info("Streaming to security topic with key {}, value {}", key, createCvCommand)).
                 to(securityTopic);
 
-        processedStreamMap
-                .get("branch-notification").
-                mapValues(ProcessedMessage::value).
-                peek((String key, Object createCvCommand) -> log.info("Streaming to notification topic with key {}, value {}", key, createCvCommand)).
-                to(notificationTopic);
-
         return outboxStream;
     }
 
-    private ProcessedMessage parseOutboxDto(ObjectMapper outboxObjectMapper, StreamingCommand outboxDto, String type) {
+    private ProcessedMessage parseOutboxDto(ObjectMapper outboxObjectMapper, StreamingCommand outboxDto, String serviceType) {
         if (outboxDto == null || outboxDto.payload() == null) {
-            return new ProcessedMessage(null, type, new RuntimeException("Empty payload"));
+            return new ProcessedMessage(null, serviceType, new RuntimeException("Empty payload"));
         }
         JsonNode jsonNode = outboxObjectMapper.valueToTree(outboxDto.payload());
 
         try {
-            return switch (type) {
+            return switch (serviceType) {
                 case "ACCOUNTING" -> new ProcessedMessage(
                         outboxObjectMapper.treeToValue(jsonNode, AllocateBudgetCommand.class),
-                        type,
+                        serviceType,
                         null
                 );
                 case "RESOURCES" -> new ProcessedMessage(
                         outboxObjectMapper.treeToValue(jsonNode, CheckResourcesCommand.class),
-                        type,
+                        serviceType,
                         null
                 );
                 case "SECURITY" -> new ProcessedMessage(
                         outboxObjectMapper.treeToValue(jsonNode, CheckSecurityCommand.class),
-                        type,
+                        serviceType,
                         null
                 );
                 case "PROFILER" -> new ProcessedMessage(
                         outboxObjectMapper.treeToValue(jsonNode, CurriculumVitaeCreateCommand.class),
-                        type,
-                        null
-                );
-
-                case "NOTIFICATION" -> new ProcessedMessage(
-                        outboxObjectMapper.treeToValue(jsonNode, NotificationCommand.class),
-                        type,
+                        serviceType,
                         null
                 );
 
 
                 default -> new ProcessedMessage(
                         outboxDto,
-                        type,
-                        new RuntimeException("Unsupported type in header: " + type)
+                        serviceType,
+                        new RuntimeException("Unsupported type in header: " + serviceType)
                 );
             };
         } catch (JsonProcessingException e) {
-            log.error("Failed to parse payload for type: {}", type, e);
-            return new ProcessedMessage(outboxDto, type, e);
+            log.error("Failed to parse payload for type: {}", serviceType, e);
+            return new ProcessedMessage(outboxDto, serviceType, e);
         }
+    }
+
+    private static void putHeader(Headers headers, String headerName, String deleteHeader, String value) {
+        headers.remove(deleteHeader);
+        headers.add(headerName, value.getBytes(StandardCharsets.UTF_8));
     }
 
     private record ProcessedMessage(Object value, String type, Exception error) {

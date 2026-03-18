@@ -23,7 +23,5 @@ app:
       name: jdmik12.accounting.allocation.command
     security-topic:
       name: jdmik12.security.check.command
-    notification-topic:
-      name: jdmik12.notification.send.command
     dlt-topic:
       name: jdmik12.streaming.dlt
