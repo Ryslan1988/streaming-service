@@ -4,9 +4,11 @@ spring:
   kafka:
     bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
     streams:
-      application-id: outbox-streaming
+      application-id: jdmik12-${spring.application.name}-consumer-group
       properties:
         processing.guarantee: exactly_once_v2
+        spring.json.use.type.headers: false
+        spring.json.add.type.headers: false
   config:
     import: optional:file:.env.sample[.properties]
 
@@ -21,7 +23,9 @@ app:
       name: jdmik12.cv.create
     accounting-topic:
       name: jdmik12.accounting.allocation.command
+    resources-topic:
+      name: jdmik12.resource.check.command
     security-topic:
       name: jdmik12.security.check.command
     dlt-topic:
-      name: jdmik12.streaming.dlt
+      name: jdmik12.streaming.command.dlt
