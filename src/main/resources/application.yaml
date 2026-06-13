@@ -1,3 +1,31 @@
 spring:
   application:
     name: streaming-service
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+    streams:
+      application-id: jdmik12-${spring.application.name}-consumer-group
+      properties:
+        processing.guarantee: exactly_once_v2
+        spring.json.use.type.headers: false
+        spring.json.add.type.headers: false
+  config:
+    import: optional:file:.env.sample[.properties]
+
+app:
+  kafka-topics:
+    outbox-topic:
+      name: jdmik12.streaming.command
+      partitions: 3
+      replicas: 3
+      min-in-sync-replicas: 2
+    cv-topic:
+      name: jdmik12.cv.create
+    accounting-topic:
+      name: jdmik12.accounting.allocation.command
+    resources-topic:
+      name: jdmik12.resource.check.command
+    security-topic:
+      name: jdmik12.security.check.command
+    dlt-topic:
+      name: jdmik12.streaming.command.dlt

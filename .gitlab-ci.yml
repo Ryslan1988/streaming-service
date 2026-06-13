@@ -1,0 +1,4 @@
+include:
+  - project: 'jd-mi_ka/jd-mk-12/ci-cd-templates'
+    ref: main
+    file: '/templates/.gitlab-ci.yml'
